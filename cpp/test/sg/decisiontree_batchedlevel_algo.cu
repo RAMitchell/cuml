@@ -51,7 +51,7 @@ class DtBaseTest : public ::testing::TestWithParam<DtTestParams> {
     handle->set_stream(stream);
     set_tree_params(params, inparams.max_depth, 1 << inparams.max_depth, 1.f,
                     inparams.nbins, SPLIT_ALGO::GLOBAL_QUANTILE, 0,
-                    inparams.nbins, inparams.min_gain, false,
+                    1, inparams.min_gain, false,
                     inparams.splitType, false, true, 128);
     auto allocator = handle->get_device_allocator();
     data = (T*)allocator->allocate(sizeof(T) * inparams.M * inparams.N, stream);
@@ -136,8 +136,10 @@ INSTANTIATE_TEST_CASE_P(BatchedLevelAlgo, DtClsTestF,
 const std::vector<DtTestParams> allR = {
   {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MSE, 12345ULL},
   {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MSE, 12345ULL},
-  {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MAE, 12345ULL},
-  {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MAE, 12345ULL},
+  {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MSE, 12345ULL},
+  // {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MAE, 12345ULL},
+  // {1024, 4, 2, 8, 16, 0.00001f, CRITERION::MAE, 12345ULL},
+  {10, 1, 1, 2, 16, 0.0f, CRITERION::MAE, 12345ULL},
 };
 template <typename T>
 class DtRegressorTest : public DtBaseTest<T, T> {
@@ -153,19 +155,14 @@ class DtRegressorTest : public DtBaseTest<T, T> {
                                          T(0.5), T(0.0), false, inparams.seed);
   }
 };  // class DtRegressorTest
+
 typedef DtRegressorTest<float> DtRegTestF;
 ///@todo: add checks
 TEST_P(DtRegTestF, Test) {
   int num_leaves, depth;
   grow_tree(handle->get_device_allocator(), handle->get_host_allocator(), data,
             1, 0, inparams.N, inparams.M, labels, quantiles, rowids, inparams.M,
-            0, params, stream, sparsetree, num_leaves, depth);
-  // goes all the way to max-depth
-#if CUDART_VERSION >= 11020
-  if (inparams.splitType == CRITERION::MAE) {
-    GTEST_SKIP();
-  }
-#endif
+            1, params, stream, sparsetree, num_leaves, depth);
   ASSERT_EQ(depth, inparams.max_depth);
 }
 INSTANTIATE_TEST_CASE_P(BatchedLevelAlgo, DtRegTestF,

@@ -46,6 +46,8 @@ struct Node {
   /** depth of this node */
   IdxT depth;
 
+  HDI bool isLeaf() { return info.colid == Leaf; }
+
   /**
    * @brief Initialize the underlying sparse tree node struct
    */

@@ -16,10 +16,14 @@
 
 #pragma once
 
+#include <thrust/device_vector.h>
+#include <thrust/sort.h>
+#include <algorithm>
 #include <common/grid_sync.cuh>
 #include <cub/cub.cuh>
 #include <limits>
 #include <raft/cuda_utils.cuh>
+#include <vector>
 #include "input.cuh"
 #include "node.cuh"
 #include "split.cuh"
@@ -121,6 +125,8 @@ class GiniObjectiveFunction {
     }
     return class_idx;
   }
+  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
+                              const IdxT* rowids, const LabelT* labels) {}
 };
 
 template <typename DataT_, typename LabelT_, typename IdxT_>
@@ -197,6 +203,8 @@ class EntropyObjectiveFunction {
     return GiniObjectiveFunction<DataT, LabelT, IdxT>::LeafPrediction(shist,
                                                                       nclasses);
   }
+  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
+                              const IdxT* rowids, const LabelT* labels) {}
 };
 
 template <typename DataT_, typename LabelT_, typename IdxT_>
@@ -270,6 +278,46 @@ class MSEObjectiveFunction {
 
   static DI LabelT LeafPrediction(BinT* shist, int nclasses) {
     return shist[0].label_sum / shist[0].count;
+  }
+  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
+                              const IdxT* rowids, const LabelT* labels) {}
+};
+
+// Use MSE split gain, postprocess tree
+template <typename DataT_, typename LabelT_, typename IdxT_>
+class MAEObjectiveFunction
+  : public MSEObjectiveFunction<DataT_, LabelT_, IdxT_> {
+ public:
+  using DataT = DataT_;
+  using LabelT = LabelT_;
+  using IdxT = IdxT_;
+
+  DI MAEObjectiveFunction(IdxT nclasses, DataT min_impurity_decrease,
+                          IdxT min_samples_leaf)
+    : MSEObjectiveFunction<DataT, LabelT, IdxT>(nclasses, min_impurity_decrease,
+                                                min_samples_leaf) {}
+  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
+                              const Input<DataT, LabelT, IdxT> input) {
+    // Get the leaf nodes
+    using NodeTuple = std::tuple<Node<DataT, LabelT, IdxT>, int>;
+    std::vector<NodeTuple> h_leaves;
+    h_leaves.reserve(h_nodes.size());
+    for (auto i = 0; i < h_nodes.size(); i++) {
+      auto n = h_nodes[i];
+      if (n.isLeaf()) {
+        h_leaves.emplace_back(NodeTuple{n, i});
+      }
+    }
+    thrust::device_vector<NodeTuple> leaves(h_leaves);
+    thrust::sort(leaves.begin(), leaves.end(),
+                 [] __device__(const NodeTuple& a, const NodeTuple& b) -> bool {
+                   return std::get<0>(a).start < std::get<0>(b).start;
+                 });
+    thrust::device_vector<LabelT> labels(input.nSampledRows);
+    thrust::transform(
+      thrust::device, input.rowids, input.rowids + input.nSampledRows,
+      labels.begin(),
+      [=] __device__(IdxT rowid) { return input.labels[rowid]; });
   }
 };
 
