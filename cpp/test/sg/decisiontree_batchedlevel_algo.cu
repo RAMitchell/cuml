@@ -15,6 +15,7 @@
  */
 
 #include <decisiontree/memory.h>
+#include <decisiontree/decisiontree_impl.h>
 #include <decisiontree/quantile/quantile.h>
 #include <gtest/gtest.h>
 #include <raft/linalg/cublas_wrappers.h>

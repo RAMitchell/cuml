@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <thrust/binary_search.h>
 #include <thrust/device_vector.h>
 #include <thrust/sort.h>
 #include <algorithm>
@@ -125,8 +126,8 @@ class GiniObjectiveFunction {
     }
     return class_idx;
   }
-  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
-                              const IdxT* rowids, const LabelT* labels) {}
+  template <class... Types>
+  static void PostprocessTree(Types... args) {}
 };
 
 template <typename DataT_, typename LabelT_, typename IdxT_>
@@ -203,8 +204,8 @@ class EntropyObjectiveFunction {
     return GiniObjectiveFunction<DataT, LabelT, IdxT>::LeafPrediction(shist,
                                                                       nclasses);
   }
-  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
-                              const IdxT* rowids, const LabelT* labels) {}
+  template <class... Types>
+  static void PostprocessTree(Types... args) {}
 };
 
 template <typename DataT_, typename LabelT_, typename IdxT_>
@@ -279,9 +280,17 @@ class MSEObjectiveFunction {
   static DI LabelT LeafPrediction(BinT* shist, int nclasses) {
     return shist[0].label_sum / shist[0].count;
   }
-  static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
-                              const IdxT* rowids, const LabelT* labels) {}
+  template <class... Types>
+  static void PostprocessTree(Types... args) {}
 };
+
+template <typename T>
+void print(T x) {
+  for (auto x_i : x) {
+    std::cout << x_i << " ";
+  }
+  std::cout << std::endl;
+}
 
 // Use MSE split gain, postprocess tree
 template <typename DataT_, typename LabelT_, typename IdxT_>
@@ -299,7 +308,7 @@ class MAEObjectiveFunction
   static void PostprocessTree(std::vector<Node<DataT, LabelT, IdxT>>& h_nodes,
                               const Input<DataT, LabelT, IdxT> input) {
     // Get the leaf nodes
-    using NodeTuple = std::tuple<Node<DataT, LabelT, IdxT>, int>;
+    using NodeTuple = thrust::tuple<Node<DataT, LabelT, IdxT>, int>;
     std::vector<NodeTuple> h_leaves;
     h_leaves.reserve(h_nodes.size());
     for (auto i = 0; i < h_nodes.size(); i++) {
@@ -311,13 +320,55 @@ class MAEObjectiveFunction
     thrust::device_vector<NodeTuple> leaves(h_leaves);
     thrust::sort(leaves.begin(), leaves.end(),
                  [] __device__(const NodeTuple& a, const NodeTuple& b) -> bool {
-                   return std::get<0>(a).start < std::get<0>(b).start;
+                   return thrust::get<0>(a).start < thrust::get<0>(b).start;
                  });
     thrust::device_vector<LabelT> labels(input.nSampledRows);
     thrust::transform(
       thrust::device, input.rowids, input.rowids + input.nSampledRows,
       labels.begin(),
       [=] __device__(IdxT rowid) { return input.labels[rowid]; });
+    thrust::device_vector<IdxT> node_id(input.nSampledRows);
+    auto counting = thrust::make_counting_iterator(0ll);
+    auto leaf_boundaries = thrust::make_transform_iterator(
+      leaves.begin(),
+      [=] __device__(const NodeTuple& n) { return thrust::get<0>(n).start; });
+    size_t n_leaves = leaves.size();
+    // Binary search to find leaf each row belongs to
+    thrust::transform(thrust::device, counting, counting + input.nSampledRows,
+                      node_id.begin(), [=] __device__(IdxT idx) {
+                        return thrust::upper_bound(thrust::seq, leaf_boundaries,
+                                                   leaf_boundaries + n_leaves,
+                                                   idx) -
+                               leaf_boundaries - 1;
+                      });
+    auto zip = thrust::make_zip_iterator(
+      thrust::make_tuple(labels.begin(), node_id.begin()));
+    thrust::sort(zip, zip + labels.size(),
+                 [] __device__(const thrust::tuple<LabelT, IdxT>& a,
+                               const thrust::tuple<LabelT, IdxT>& b) {
+                   if (thrust::get<1>(a) < thrust::get<1>(b)) return true;
+                   if (thrust::get<1>(b) < thrust::get<1>(a)) return false;
+                   if (thrust::get<0>(a) < thrust::get<0>(b)) return true;
+                   return false;
+                 });
+    // Grab the median element for each leaf
+    auto d_leaves = leaves.data().get();
+    auto d_labels = labels.data().get();
+    thrust::for_each_n(counting, n_leaves, [=] __device__(size_t idx) {
+      auto& n = thrust::get<0>(d_leaves[idx]);
+      // If number of elements is odd, get the middle element
+      // If even, take the midpoint
+      size_t median_idx_high = n.start + n.count / 2;
+      size_t median_idx_low = n.start + std::max(n.count - 1, IdxT(0)) / 2;
+      n.info.prediction =
+        (d_labels[median_idx_low] + d_labels[median_idx_high]) / 2;
+    });
+    thrust::copy(leaves.begin(), leaves.end(), h_leaves.begin());
+    for (const auto& nt : h_leaves) {
+      auto idx = thrust::get<1>(nt);
+      auto pred = thrust::get<0>(nt).info.prediction;
+      h_nodes[idx].info.prediction = pred;
+    }
   }
 };
 

@@ -274,7 +274,7 @@ struct Builder {
     }
     raft::update_host(&num_leaves, n_leaves, 1, s);
     raft::update_host(&depth, n_depth, 1, s);
-    ObjectiveT::PostprocessTree(h_nodes, input.rowids, input.labels);
+    ObjectiveT::PostprocessTree(h_nodes, input);
     ML::POP_RANGE();
   }
 
