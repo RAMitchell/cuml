@@ -30,7 +30,7 @@
 #include "split.cuh"
 
 namespace ML {
-namespace DecisionTree {
+namespace DT {
 
 struct IntBin {
   int x;
@@ -372,5 +372,5 @@ class MAEObjectiveFunction
   }
 };
 
-}  // namespace DecisionTree
+}  // namespace DT
 }  // namespace ML
