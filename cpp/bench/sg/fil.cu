@@ -90,7 +90,11 @@ class FIL : public RegressionFixture<float> {
       .algo = p_rest.algo,
       .output_class = params.nclasses > 1,  // cuML RF forest
       .threshold = 1.f / params.nclasses,   //Fixture::DatasetParams
-      .storage_type = p_rest.storage};
+      .storage_type = p_rest.storage,
+      .blocks_per_sm = 8,
+      .threads_per_tree = 1,
+      .n_items = 0,
+      .pforest_shape_str = nullptr};
     ML::fil::from_treelite(*handle, &forest, model, &tl_params);
 
     // only time prediction
@@ -146,19 +150,15 @@ std::vector<Params> getInputs() {
                        (1 << 20),          /* max_leaves */
                        1.f,                /* max_features */
                        32,                 /* n_bins */
-                       1,                  /* split_algo */
                        3,                  /* min_samples_leaf */
                        3,                  /* min_samples_split */
                        0.0f,               /* min_impurity_decrease */
-                       true,               /* bootstrap_features */
                        true,               /* bootstrap */
                        1,                  /* n_trees */
                        1.f,                /* max_samples */
                        1234ULL,            /* seed */
                        ML::CRITERION::MSE, /* split_criterion */
-                       false,              /* quantile_per_tree */
                        8,                  /* n_streams */
-                       false,              /* use_experimental_backend */
                        128                 /* max_batch_size */
   );
 

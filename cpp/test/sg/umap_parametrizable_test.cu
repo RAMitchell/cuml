@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cuml/metrics/metrics.hpp>
+
 #include <gtest/gtest.h>
 #include <iostream>
 #include <vector>
@@ -21,12 +23,12 @@
 #include <cuml/manifold/umapparams.h>
 #include <datasets/digits.h>
 #include <raft/cudart_utils.h>
+#include <test_utils.h>
 #include <cuml/common/device_buffer.hpp>
 #include <cuml/datasets/make_blobs.hpp>
 #include <cuml/manifold/umap.hpp>
 #include <cuml/neighbors/knn.hpp>
 #include <linalg/reduce_rows_by_key.cuh>
-#include <metrics/trustworthiness.cuh>
 #include <raft/cuda_utils.cuh>
 #include <raft/distance/distance.cuh>
 #include <raft/handle.hpp>
@@ -215,7 +217,7 @@ class UMAPParametrizableTest : public ::testing::Test {
     std::cout << "\numap_params : [" << std::boolalpha
               << umap_params.n_neighbors << "-" << umap_params.n_components
               << "-" << umap_params.n_epochs << "-" << umap_params.random_state
-              << "-" << umap_params.multicore_implem << "]" << std::endl;
+              << std::endl;
 
     std::cout << "test_params : [" << std::boolalpha
               << test_params.fit_transform << "-" << test_params.supervised
@@ -247,6 +249,7 @@ class UMAPParametrizableTest : public ::testing::Test {
 
     device_buffer<float> embeddings1(alloc, stream,
                                      n_samples * umap_params.n_components);
+
     float* e1 = embeddings1.data();
 
     get_embedding(handle, X_d.data(), (float*)y_d.data(), e1, test_params,
@@ -259,25 +262,25 @@ class UMAPParametrizableTest : public ::testing::Test {
       return;
     }
 
+    device_buffer<float> embeddings2(alloc, stream,
+                                     n_samples * umap_params.n_components);
+    float* e2 = embeddings2.data();
+    get_embedding(handle, X_d.data(), (float*)y_d.data(), e2, test_params,
+                  umap_params);
+
 #if CUDART_VERSION >= 11020
+    bool equal =
+      are_equal(e1, e2, n_samples * umap_params.n_components, alloc, stream);
 
-    if (!umap_params.multicore_implem) {
-      device_buffer<float> embeddings2(alloc, stream,
-                                       n_samples * umap_params.n_components);
-      float* e2 = embeddings2.data();
-      get_embedding(handle, X_d.data(), (float*)y_d.data(), e2, test_params,
-                    umap_params);
-
-      bool equal =
-        are_equal(e1, e2, n_samples * umap_params.n_components, alloc, stream);
-
-      if (!equal) {
-        raft::print_device_vector("e1", e1, 25, std::cout);
-        raft::print_device_vector("e2", e2, 25, std::cout);
-      }
-
-      ASSERT_TRUE(equal);
+    if (!equal) {
+      raft::print_device_vector("e1", e1, 25, std::cout);
+      raft::print_device_vector("e2", e2, 25, std::cout);
     }
+
+    ASSERT_TRUE(equal);
+#else
+    ASSERT_TRUE(raft::devArrMatch(e1, e2, n_samples * umap_params.n_components,
+                                  raft::Compare<float>{}));
 #endif
   }
 
@@ -294,23 +297,17 @@ class UMAPParametrizableTest : public ::testing::Test {
 
     std::vector<UMAPParams> umap_params_vec(4);
     umap_params_vec[0].n_components = 2;
-    umap_params_vec[0].multicore_implem = true;
 
     umap_params_vec[1].n_components = 10;
-    umap_params_vec[1].multicore_implem = true;
 
     umap_params_vec[2].n_components = 21;
     umap_params_vec[2].random_state = 43;
     umap_params_vec[2].init = 0;
-    umap_params_vec[2].multicore_implem = false;
-    umap_params_vec[2].optim_batch_size = 0;  // use default value
     umap_params_vec[2].n_epochs = 500;
 
     umap_params_vec[3].n_components = 25;
     umap_params_vec[3].random_state = 43;
     umap_params_vec[3].init = 0;
-    umap_params_vec[3].multicore_implem = false;
-    umap_params_vec[3].optim_batch_size = 0;  // use default value
     umap_params_vec[3].n_epochs = 500;
 
     for (auto& umap_params : umap_params_vec) {

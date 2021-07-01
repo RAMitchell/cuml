@@ -142,7 +142,7 @@ class EntropyObjectiveFunction {
 
  public:
   using BinT = IntBin;
-  EntropyObjectiveFunction(DataT nclasses, IdxT min_impurity_decrease,
+  EntropyObjectiveFunction(IdxT nclasses, DataT min_impurity_decrease,
                            IdxT min_samples_leaf)
     : nclasses(nclasses),
       min_impurity_decrease(min_impurity_decrease),
@@ -176,7 +176,7 @@ class EntropyObjectiveFunction {
           }
 
           val_i += lval_i;
-          auto total_sum = scdf_labels[2 * nbins * j + nbins - 1].x;
+          auto total_sum = scdf_labels[nbins * j + nbins - 1].x;
           auto rval_i = total_sum - lval_i;
           if (rval_i != 0) {
             auto rval = DataT(rval_i);
