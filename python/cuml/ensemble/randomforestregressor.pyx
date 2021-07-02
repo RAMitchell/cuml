@@ -341,8 +341,8 @@ class RandomForestRegressor(BaseRandomForestModel,
                 self.rf_forest64)
             self.rf_forest64 = 0
 
-        if self.treelite_handle:
-            TreeliteModel.free_treelite_model(self.treelite_handle)
+        #if self.treelite_handle:
+        #    TreeliteModel.free_treelite_model(self.treelite_handle)
 
         self.treelite_handle = None
         self.treelite_serialized_model = None
