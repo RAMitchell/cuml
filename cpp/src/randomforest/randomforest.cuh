@@ -50,6 +50,7 @@ class RandomForest {
                       const cudaStream_t stream)
   {
     raft::common::nvtx::range fun_scope("bootstrapping row IDs @randomforest.cuh");
+    if (selected_rows->size() == 0) { return; }
 
     // Hash these together so they are uncorrelated
     auto rs = DT::fnv1a32_basis;

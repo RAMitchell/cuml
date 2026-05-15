@@ -208,7 +208,7 @@ CUML_EXPORT QuantileReturnValue<T> computeQuantiles(const raft::handle_t& handle
     raft::common::nvtx::push_range("sample quantile column");
     T* sort_input = sampled_column.data();
     if (distributed) {
-      if (local_sample_count == n_rows) {
+      if (local_sample_count > 0 && local_sample_count == n_rows) {
         RAFT_CUDA_TRY(cudaMemcpyAsync(local_sampled_column.data(),
                                       data + static_cast<int64_t>(col) * n_rows,
                                       sizeof(T) * n_rows,
