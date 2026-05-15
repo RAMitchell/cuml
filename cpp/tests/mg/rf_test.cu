@@ -363,7 +363,7 @@ TEST_P(RfMgPropertyTest, DistributedProperties) {}
 
 std::vector<RfMgTestParams> inputs = {
   {128, 4, 1, 1.0f, 3, -1, 16, 1, 2, 0.0f, 1, GINI, 7, 2, false, PartitionKind::Contiguous},
-  {128, 4, 3, 0.5f, 4, 16, 32, 1, 2, 0.0f, 1, ENTROPY, 11, 2, false, PartitionKind::Strided},
+  {128, 4, 3, 0.5f, 4, 16, 32, 1, 2, 0.0f, 2, ENTROPY, 11, 2, false, PartitionKind::Strided},
   {192, 6, 1, 1.0f, 5, -1, 32, 2, 4, 0.0f, 1, MSE, 13, 2, false, PartitionKind::Imbalanced},
   {96, 3, 2, 1.0f, 4, 8, 8, 1, 2, 0.0f, 1, GINI, 17, 2, true, PartitionKind::Imbalanced},
   {160, 5, 1, 0.8f, 4, -1, 16, 1, 2, 0.0f, 1, MSE, 19, 2, true, PartitionKind::Contiguous}};

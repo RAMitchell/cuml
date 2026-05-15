@@ -9,6 +9,7 @@
 
 #include <raft/core/handle.hpp>
 #include <raft/core/nvtx.hpp>
+#include <raft/core/resource/comms.hpp>
 #include <raft/random/permute.cuh>
 #include <raft/random/rng.cuh>
 #include <raft/stats/accuracy.cuh>
@@ -122,7 +123,9 @@ class RandomForest {
     raft::common::nvtx::range fun_scope("RandomForest::fit @randomforest.cuh");
     this->error_checking(input, labels, n_rows, n_cols, false);
     const raft::handle_t& handle = user_handle;
-    int n_sampled_rows           = 0;
+    int device                   = 0;
+    RAFT_CUDA_TRY(cudaGetDevice(&device));
+    int n_sampled_rows = 0;
     if (this->rf_params.bootstrap) {
       n_sampled_rows = std::round(this->rf_params.max_samples * n_rows);
     } else {
@@ -139,6 +142,11 @@ class RandomForest {
            "rf_params.n_streams (=%d) should be <= raft::handle_t.n_streams (=%lu)",
            n_streams,
            handle.get_stream_pool_size());
+    // Distributed tree builders issue collectives independently, so train them serially until
+    // the forest-level scheduler can impose a global collective order across concurrent trees.
+    if (raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1) {
+      n_streams = 1;
+    }
 
     // computing the quantiles: last two return values are shared pointers to device memory
     // encapsulated by quantiles struct
@@ -162,6 +170,7 @@ class RandomForest {
 
 #pragma omp parallel for num_threads(n_streams)
     for (int i = 0; i < this->rf_params.n_trees; i++) {
+      RAFT_CUDA_TRY(cudaSetDevice(device));
       int stream_id = omp_get_thread_num();
       auto s        = handle.get_stream_from_stream_pool(stream_id);
 
