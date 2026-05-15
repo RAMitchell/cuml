@@ -148,10 +148,9 @@ CUML_EXPORT QuantileReturnValue<T> computeQuantiles(const raft::handle_t& handle
 
   auto stream      = handle.get_stream();
   bool distributed = raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1;
-  RAFT_EXPECTS(distributed || n_rows > 0, "n_rows must be positive");
-  int rank           = distributed ? handle.get_comms().get_rank() : 0;
-  int comm_size      = distributed ? handle.get_comms().get_size() : 1;
-  int64_t size       = static_cast<int64_t>(max_n_bins) * oversampling_factor;
+  int rank         = distributed ? handle.get_comms().get_rank() : 0;
+  int comm_size    = distributed ? handle.get_comms().get_size() : 1;
+  int64_t size     = static_cast<int64_t>(max_n_bins) * oversampling_factor;
   auto target_sample = std::max<int64_t>(1, size);
 
   std::uint64_t global_rows = static_cast<std::uint64_t>(n_rows);

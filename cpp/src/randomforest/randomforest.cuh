@@ -72,12 +72,12 @@ class RandomForest {
                       int n_rows,
                       int n_cols,
                       bool predict,
-                      bool allow_empty_rows = false) const
+                      bool allow_empty_local_rows = false) const
   {
     if (predict) {
       ASSERT(predictions != nullptr, "Error! User has not allocated memory for predictions.");
     }
-    ASSERT(allow_empty_rows ? (n_rows >= 0) : (n_rows > 0), "Invalid n_rows %d", n_rows);
+    ASSERT(allow_empty_local_rows ? (n_rows >= 0) : (n_rows > 0), "Invalid n_rows %d", n_rows);
     ASSERT((n_cols > 0), "Invalid n_cols %d", n_cols);
 
     if (n_rows == 0) { return; }
@@ -132,7 +132,7 @@ class RandomForest {
     const raft::handle_t& handle = user_handle;
     bool distributed =
       raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1;
-    this->error_checking(input, labels, n_rows, n_cols, false, distributed);
+    this->error_checking(input, labels, n_rows, n_cols, false, true);
     int device = 0;
     RAFT_CUDA_TRY(cudaGetDevice(&device));
     int n_sampled_rows = 0;
