@@ -41,9 +41,8 @@ struct NodeWorkItem {
  */
 template <typename IdxT>
 struct WorkloadInfo {
-  IdxT nodeid;        // Node in the batch on which the threadblock needs to work
-  IdxT large_nodeid;  // counts only large nodes (nodes that require more than one block along x-dim
-                      // for histogram calculation)
+  IdxT nodeid;          // Node in the batch on which the threadblock needs to work
+  IdxT large_nodeid;    // legacy field; histogram offsets now use nodeid for all nodes
   IdxT offset_blockid;  // Offset threadblock id among all the blocks that are
                         // working on this node
   IdxT num_blocks;      // Total number of blocks that are working on the node
@@ -75,14 +74,8 @@ void launchNodeSplitKernel(const IdxT min_samples_leaf,
                            const NodeWorkItem* work_items,
                            const size_t work_items_size,
                            const Split<DataT, IdxT>* splits,
+                           Split<DataT, IdxT>* local_splits,
                            cudaStream_t builder_stream);
-template <typename DataT, typename LabelT, typename IdxT, int TPB>
-void launchDistributedNodeSplitKernel(const DataT min_impurity_decrease,
-                                      const Dataset<DataT, LabelT, IdxT>& dataset,
-                                      const NodeWorkItem* work_items,
-                                      const size_t work_items_size,
-                                      Split<DataT, IdxT>* local_splits,
-                                      cudaStream_t builder_stream);
 
 template <typename DatasetT, typename NodeT, typename ObjectiveT, typename DataT>
 void launchLeafKernel(ObjectiveT objective,
@@ -380,46 +373,20 @@ template <typename DataT,
           int TPB,
           typename ObjectiveT,
           typename BinT>
-void launchComputeSplitKernel(BinT* histograms,
-                              IdxT n_bins,
-                              IdxT min_samples_split,
-                              IdxT max_leaves,
-                              const Dataset<DataT, LabelT, IdxT>& dataset,
-                              const Quantiles<DataT, IdxT>& quantiles,
-                              const NodeWorkItem* work_items,
-                              IdxT colStart,
-                              const IdxT* colids,
-                              int* done_count,
-                              int* mutex,
-                              volatile Split<DataT, IdxT>* splits,
-                              ObjectiveT& objective,
-                              IdxT treeid,
-                              const WorkloadInfo<IdxT>* workload_info,
-                              uint64_t seed,
-                              dim3 grid,
-                              size_t smem_size,
-                              cudaStream_t builder_stream);
-
-template <typename DataT,
-          typename LabelT,
-          typename IdxT,
-          int TPB,
-          typename ObjectiveT,
-          typename BinT>
 void launchComputeSplitHistogramKernel(BinT* histograms,
-                                        IdxT max_n_bins,
-                                        const Dataset<DataT, LabelT, IdxT>& dataset,
-                                        const Quantiles<DataT, IdxT>& quantiles,
-                                        const NodeWorkItem* work_items,
-                                        IdxT colStart,
-                                        const IdxT* colids,
-                                        ObjectiveT& objective,
-                                        IdxT treeid,
-                                        const WorkloadInfo<IdxT>* workload_info,
-                                        uint64_t seed,
-                                        dim3 grid,
-                                        size_t smem_size,
-                                        cudaStream_t builder_stream);
+                                       IdxT max_n_bins,
+                                       const Dataset<DataT, LabelT, IdxT>& dataset,
+                                       const Quantiles<DataT, IdxT>& quantiles,
+                                       const NodeWorkItem* work_items,
+                                       IdxT colStart,
+                                       const IdxT* colids,
+                                       ObjectiveT& objective,
+                                       IdxT treeid,
+                                       const WorkloadInfo<IdxT>* workload_info,
+                                       uint64_t seed,
+                                       dim3 grid,
+                                       size_t smem_size,
+                                       cudaStream_t builder_stream);
 
 template <typename DataT,
           typename LabelT,
@@ -468,7 +435,10 @@ inline void unpackHistograms(const int* in, CountBin* out, std::size_t len, cuda
   transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
 }
 
-inline void packHistograms(const AggregateBin* in, double* out, std::size_t len, cudaStream_t stream)
+inline void packHistograms(const AggregateBin* in,
+                           double* out,
+                           std::size_t len,
+                           cudaStream_t stream)
 {
   auto op = [] __device__(const AggregateBin* in, double* out, std::size_t i) {
     out[2 * i]     = in[i].label_sum;
@@ -477,7 +447,10 @@ inline void packHistograms(const AggregateBin* in, double* out, std::size_t len,
   transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
 }
 
-inline void unpackHistograms(const double* in, AggregateBin* out, std::size_t len, cudaStream_t stream)
+inline void unpackHistograms(const double* in,
+                             AggregateBin* out,
+                             std::size_t len,
+                             cudaStream_t stream)
 {
   auto op = [] __device__(const double* in, AggregateBin* out, std::size_t i) {
     out[i].label_sum = in[2 * i];
