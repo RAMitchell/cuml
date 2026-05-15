@@ -17,6 +17,8 @@
 
 #include <cub/cub.cuh>
 
+#include <algorithm>
+
 namespace ML {
 namespace DT {
 
@@ -74,6 +76,13 @@ void launchNodeSplitKernel(const IdxT min_samples_leaf,
                            const size_t work_items_size,
                            const Split<DataT, IdxT>* splits,
                            cudaStream_t builder_stream);
+template <typename DataT, typename LabelT, typename IdxT, int TPB>
+void launchDistributedNodeSplitKernel(const DataT min_impurity_decrease,
+                                      const Dataset<DataT, LabelT, IdxT>& dataset,
+                                      const NodeWorkItem* work_items,
+                                      const size_t work_items_size,
+                                      Split<DataT, IdxT>* local_splits,
+                                      cudaStream_t builder_stream);
 
 template <typename DatasetT, typename NodeT, typename ObjectiveT, typename DataT>
 void launchLeafKernel(ObjectiveT objective,
@@ -390,6 +399,92 @@ void launchComputeSplitKernel(BinT* histograms,
                               dim3 grid,
                               size_t smem_size,
                               cudaStream_t builder_stream);
+
+template <typename DataT,
+          typename LabelT,
+          typename IdxT,
+          int TPB,
+          typename ObjectiveT,
+          typename BinT>
+void launchComputeSplitHistogramKernel(BinT* histograms,
+                                        IdxT max_n_bins,
+                                        const Dataset<DataT, LabelT, IdxT>& dataset,
+                                        const Quantiles<DataT, IdxT>& quantiles,
+                                        const NodeWorkItem* work_items,
+                                        IdxT colStart,
+                                        const IdxT* colids,
+                                        ObjectiveT& objective,
+                                        IdxT treeid,
+                                        const WorkloadInfo<IdxT>* workload_info,
+                                        uint64_t seed,
+                                        dim3 grid,
+                                        size_t smem_size,
+                                        cudaStream_t builder_stream);
+
+template <typename DataT,
+          typename LabelT,
+          typename IdxT,
+          int TPB,
+          typename ObjectiveT,
+          typename BinT>
+void launchEvaluateSplitKernel(BinT* histograms,
+                               IdxT max_n_bins,
+                               const Dataset<DataT, LabelT, IdxT>& dataset,
+                               const Quantiles<DataT, IdxT>& quantiles,
+                               const NodeWorkItem* work_items,
+                               IdxT colStart,
+                               const IdxT* colids,
+                               int* mutex,
+                               volatile Split<DataT, IdxT>* splits,
+                               ObjectiveT& objective,
+                               IdxT treeid,
+                               dim3 grid,
+                               size_t smem_size,
+                               cudaStream_t builder_stream);
+
+template <typename InT, typename OutT, typename OpT>
+static __global__ void transformHistogramKernel(const InT* in, OutT* out, std::size_t len, OpT op)
+{
+  std::size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  for (std::size_t i = tid; i < len; i += std::size_t(blockDim.x) * gridDim.x) {
+    op(in, out, i);
+  }
+}
+
+inline std::size_t histogramTransformBlocks(std::size_t len)
+{
+  return std::max<std::size_t>(std::size_t{1}, raft::ceildiv<std::size_t>(len, 256));
+}
+
+inline void packHistograms(const CountBin* in, int* out, std::size_t len, cudaStream_t stream)
+{
+  auto op = [] __device__(const CountBin* in, int* out, std::size_t i) { out[i] = in[i].x; };
+  transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
+}
+
+inline void unpackHistograms(const int* in, CountBin* out, std::size_t len, cudaStream_t stream)
+{
+  auto op = [] __device__(const int* in, CountBin* out, std::size_t i) { out[i].x = in[i]; };
+  transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
+}
+
+inline void packHistograms(const AggregateBin* in, double* out, std::size_t len, cudaStream_t stream)
+{
+  auto op = [] __device__(const AggregateBin* in, double* out, std::size_t i) {
+    out[2 * i]     = in[i].label_sum;
+    out[2 * i + 1] = static_cast<double>(in[i].count);
+  };
+  transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
+}
+
+inline void unpackHistograms(const double* in, AggregateBin* out, std::size_t len, cudaStream_t stream)
+{
+  auto op = [] __device__(const double* in, AggregateBin* out, std::size_t i) {
+    out[i].label_sum = in[2 * i];
+    out[i].count     = static_cast<int>(in[2 * i + 1]);
+  };
+  transformHistogramKernel<<<histogramTransformBlocks(len), 256, 0, stream>>>(in, out, len, op);
+}
 
 }  // namespace DT
 }  // namespace ML
