@@ -219,6 +219,12 @@ if(BUILD_CUML_MG_TESTS AND NOT SINGLEGPU)
   set(BUILD_CUML_MPI_COMMS ON)
 endif()
 
+if(BUILD_CUML_MPI_COMMS)
+  find_package(MPI COMPONENTS CXX)
+  find_package(ucx REQUIRED)
+  find_package(ucxx REQUIRED)
+endif()
+
 if(USE_CCACHE)
   set(CMAKE_C_COMPILER_LAUNCHER ccache)
   set(CMAKE_CXX_COMPILER_LAUNCHER ccache)

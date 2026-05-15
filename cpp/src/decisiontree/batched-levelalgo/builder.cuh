@@ -544,26 +544,26 @@ struct Builder {
     return smem_size;
   }
 
-  void allReduceHistograms(std::size_t len_histograms)
+  void allReduceHistograms(BinT* histograms_to_reduce, std::size_t len_histograms)
   {
     auto const& comm = handle.get_comms();
     if constexpr (std::is_same_v<BinT, CountBin>) {
       auto* packed = reinterpret_cast<int*>(packed_histograms);
-      packHistograms(histograms, packed, len_histograms, builder_stream);
+      packHistograms(histograms_to_reduce, packed, len_histograms, builder_stream);
       RAFT_CUDA_TRY(cudaPeekAtLastError());
       comm.allreduce(packed, packed, len_histograms, raft::comms::op_t::SUM, builder_stream);
       ASSERT(comm.sync_stream(builder_stream) == raft::comms::status_t::SUCCESS,
              "An error occurred in the distributed RF histogram all-reduce.");
-      unpackHistograms(packed, histograms, len_histograms, builder_stream);
+      unpackHistograms(packed, histograms_to_reduce, len_histograms, builder_stream);
       RAFT_CUDA_TRY(cudaPeekAtLastError());
     } else {
       auto* packed = reinterpret_cast<double*>(packed_histograms);
-      packHistograms(histograms, packed, len_histograms, builder_stream);
+      packHistograms(histograms_to_reduce, packed, len_histograms, builder_stream);
       RAFT_CUDA_TRY(cudaPeekAtLastError());
       comm.allreduce(packed, packed, 2 * len_histograms, raft::comms::op_t::SUM, builder_stream);
       ASSERT(comm.sync_stream(builder_stream) == raft::comms::status_t::SUCCESS,
              "An error occurred in the distributed RF histogram all-reduce.");
-      unpackHistograms(packed, histograms, len_histograms, builder_stream);
+      unpackHistograms(packed, histograms_to_reduce, len_histograms, builder_stream);
       RAFT_CUDA_TRY(cudaPeekAtLastError());
     }
   }
@@ -602,7 +602,7 @@ struct Builder {
                                                                         smem_size,
                                                                         builder_stream);
     RAFT_CUDA_TRY(cudaPeekAtLastError());
-    if (distributed) { allReduceHistograms(len_histograms); }
+    if (distributed) { allReduceHistograms(histograms, len_histograms); }
     dim3 eval_grid(work_items_size, n_blocks_dimy, 1);
     launchEvaluateSplitKernel<DataT, LabelT, IdxT, TPB_DEFAULT>(histograms,
                                                                 params.max_n_bins,
@@ -631,6 +631,8 @@ struct Builder {
     std::size_t max_batch_size = min(std::size_t(100000), tree->sparsetree.size());
     rmm::device_uvector<NodeT> d_tree(max_batch_size, builder_stream);
     rmm::device_uvector<InstanceRange> d_instance_ranges(max_batch_size, builder_stream);
+    rmm::device_uvector<BinT> d_leaf_histograms(max_batch_size * dataset.num_outputs,
+                                                builder_stream);
     rmm::device_uvector<DataT> d_leaves(max_batch_size * dataset.num_outputs, builder_stream);
 
     ObjectiveT objective(dataset.num_outputs, params.min_samples_leaf);
@@ -643,17 +645,31 @@ struct Builder {
       raft::update_device(
         d_instance_ranges.data(), instance_ranges.data() + batch_begin, batch_size, builder_stream);
 
+      RAFT_CUDA_TRY(cudaMemsetAsync(
+        d_leaf_histograms.data(), 0, sizeof(BinT) * d_leaf_histograms.size(), builder_stream));
       RAFT_CUDA_TRY(
         cudaMemsetAsync(d_leaves.data(), 0, sizeof(DataT) * d_leaves.size(), builder_stream));
       size_t smem_size = sizeof(BinT) * dataset.num_outputs;
-      launchLeafKernel(objective,
-                       dataset,
-                       d_tree.data(),
-                       d_instance_ranges.data(),
-                       d_leaves.data(),
-                       batch_size,
-                       smem_size,
-                       builder_stream);
+      launchLeafHistogramKernel(objective,
+                                dataset,
+                                d_tree.data(),
+                                d_instance_ranges.data(),
+                                d_leaf_histograms.data(),
+                                batch_size,
+                                smem_size,
+                                builder_stream);
+      RAFT_CUDA_TRY(cudaPeekAtLastError());
+      if (distributed) {
+        allReduceHistograms(d_leaf_histograms.data(), batch_size * dataset.num_outputs);
+      }
+      launchFinalizeLeafKernel(objective,
+                               d_tree.data(),
+                               d_leaf_histograms.data(),
+                               d_leaves.data(),
+                               batch_size,
+                               dataset.num_outputs,
+                               builder_stream);
+      RAFT_CUDA_TRY(cudaPeekAtLastError());
       raft::update_host(tree->vector_leaf.data() + batch_begin * dataset.num_outputs,
                         d_leaves.data(),
                         batch_size * dataset.num_outputs,

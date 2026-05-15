@@ -77,15 +77,24 @@ void launchNodeSplitKernel(const IdxT min_samples_leaf,
                            Split<DataT, IdxT>* local_splits,
                            cudaStream_t builder_stream);
 
-template <typename DatasetT, typename NodeT, typename ObjectiveT, typename DataT>
-void launchLeafKernel(ObjectiveT objective,
-                      DatasetT& dataset,
-                      const NodeT* tree,
-                      const InstanceRange* instance_ranges,
-                      DataT* leaves,
-                      int batch_size,
-                      size_t smem_size,
-                      cudaStream_t builder_stream);
+template <typename DatasetT, typename NodeT, typename ObjectiveT>
+void launchLeafHistogramKernel(ObjectiveT objective,
+                               DatasetT& dataset,
+                               const NodeT* tree,
+                               const InstanceRange* instance_ranges,
+                               typename ObjectiveT::BinT* leaf_histograms,
+                               int batch_size,
+                               size_t smem_size,
+                               cudaStream_t builder_stream);
+
+template <typename NodeT, typename ObjectiveT, typename DataT>
+void launchFinalizeLeafKernel(ObjectiveT objective,
+                              const NodeT* tree,
+                              const typename ObjectiveT::BinT* leaf_histograms,
+                              DataT* leaves,
+                              int batch_size,
+                              int num_outputs,
+                              cudaStream_t builder_stream);
 // Returns the lowest index in `array` whose value is greater or equal to `element`.
 // Values outside the quantile range are clamped to the edge bins: values below the
 // first quantile return 0, and values above the last quantile return len - 1.

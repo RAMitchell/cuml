@@ -136,12 +136,12 @@ void launchNodeSplitKernel(const IdxT min_samples_leaf,
                                                           local_splits);
 }
 
-template <typename DatasetT, typename NodeT, typename ObjectiveT, typename DataT>
+template <typename DatasetT, typename NodeT, typename ObjectiveT>
 static __global__ void leafKernel(ObjectiveT objective,
                                   DatasetT dataset,
                                   const NodeT* tree,
                                   const InstanceRange* instance_ranges,
-                                  DataT* leaves)
+                                  typename ObjectiveT::BinT* leaf_histograms)
 {
   using BinT = typename ObjectiveT::BinT;
   extern __shared__ char shared_memory[];
@@ -161,24 +161,59 @@ static __global__ void leafKernel(ObjectiveT objective,
   }
   __syncthreads();
   if (tid == 0) {
-    ObjectiveT::SetLeafVector(
-      histogram, dataset.num_outputs, leaves + dataset.num_outputs * node_id);
+    auto leaf_histogram = leaf_histograms + dataset.num_outputs * node_id;
+    for (int i = 0; i < dataset.num_outputs; ++i) {
+      leaf_histogram[i] = histogram[i];
+    }
   }
 }
 
-template <typename DatasetT, typename NodeT, typename ObjectiveT, typename DataT>
-void launchLeafKernel(ObjectiveT objective,
-                      DatasetT& dataset,
-                      const NodeT* tree,
-                      const InstanceRange* instance_ranges,
-                      DataT* leaves,
-                      int batch_size,
-                      size_t smem_size,
-                      cudaStream_t builder_stream)
+template <typename NodeT, typename ObjectiveT, typename DataT>
+static __global__ void finalizeLeafKernel(ObjectiveT objective,
+                                          const NodeT* tree,
+                                          const typename ObjectiveT::BinT* leaf_histograms,
+                                          DataT* leaves,
+                                          int num_outputs)
+{
+  auto node_id = blockIdx.x;
+  auto leaf    = leaves + num_outputs * node_id;
+  auto& node   = tree[node_id];
+  if (!node.IsLeaf()) {
+    for (int i = 0; i < num_outputs; ++i) {
+      leaf[i] = DataT(0);
+    }
+    return;
+  }
+  auto leaf_histogram = leaf_histograms + num_outputs * node_id;
+  ObjectiveT::SetLeafVector(leaf_histogram, num_outputs, leaf);
+}
+
+template <typename NodeT, typename ObjectiveT, typename DataT>
+void launchFinalizeLeafKernel(ObjectiveT objective,
+                              const NodeT* tree,
+                              const typename ObjectiveT::BinT* leaf_histograms,
+                              DataT* leaves,
+                              int batch_size,
+                              int num_outputs,
+                              cudaStream_t builder_stream)
+{
+  finalizeLeafKernel<<<batch_size, 1, 0, builder_stream>>>(
+    objective, tree, leaf_histograms, leaves, num_outputs);
+}
+
+template <typename DatasetT, typename NodeT, typename ObjectiveT>
+void launchLeafHistogramKernel(ObjectiveT objective,
+                               DatasetT& dataset,
+                               const NodeT* tree,
+                               const InstanceRange* instance_ranges,
+                               typename ObjectiveT::BinT* leaf_histograms,
+                               int batch_size,
+                               size_t smem_size,
+                               cudaStream_t builder_stream)
 {
   int num_blocks = batch_size;
   leafKernel<<<num_blocks, TPB_DEFAULT, smem_size, builder_stream>>>(
-    objective, dataset, tree, instance_ranges, leaves);
+    objective, dataset, tree, instance_ranges, leaf_histograms);
 }
 
 /**
@@ -420,14 +455,23 @@ template void launchNodeSplitKernel<_DataT, _LabelT, _IdxT, TPB_DEFAULT>(
   Split<_DataT, _IdxT>* local_splits,
   cudaStream_t builder_stream);
 
-template void launchLeafKernel<_DatasetT, _NodeT, _ObjectiveT, _DataT>(
+template void launchLeafHistogramKernel<_DatasetT, _NodeT, _ObjectiveT>(
   _ObjectiveT objective,
   _DatasetT& dataset,
   const _NodeT* tree,
   const InstanceRange* instance_ranges,
-  _DataT* leaves,
+  typename _ObjectiveT::BinT* leaf_histograms,
   int batch_size,
   size_t smem_size,
+  cudaStream_t builder_stream);
+
+template void launchFinalizeLeafKernel<_NodeT, _ObjectiveT, _DataT>(
+  _ObjectiveT objective,
+  const _NodeT* tree,
+  const typename _ObjectiveT::BinT* leaf_histograms,
+  _DataT* leaves,
+  int batch_size,
+  int num_outputs,
   cudaStream_t builder_stream);
 
 template void
