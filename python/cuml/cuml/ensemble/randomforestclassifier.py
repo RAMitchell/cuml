@@ -264,6 +264,55 @@ class RandomForestClassifier(BaseRandomForestModel, ClassifierMixin):
         self.n_classes_ = len(classes)
         return self._fit_forest(X, y)
 
+    def _fit_with_handle(
+        self,
+        X,
+        y,
+        handle,
+        *,
+        convert_dtype=True,
+        classes=None,
+        global_n_rows=None,
+    ) -> "RandomForestClassifier":
+        """
+        Internal fit path used by Dask RF. The supplied handle may contain
+        distributed RAFT communicator state.
+        """
+        if classes is None:
+            X, y, classes = check_inputs(
+                self,
+                X,
+                y,
+                dtype=("float32", "float64"),
+                convert_dtype=convert_dtype,
+                order="F",
+                y_dtype="int32",
+                return_classes=True,
+                ensure_min_samples=0,
+                reset=True,
+            )
+        else:
+            X, y = check_inputs(
+                self,
+                X,
+                y,
+                dtype=("float32", "float64"),
+                convert_dtype=convert_dtype,
+                order="F",
+                y_dtype=None,
+                ensure_min_samples=0,
+                reset=True,
+            )
+            classes = cp.asarray(classes)
+            y = cp.asarray(y)
+            y = cp.searchsorted(classes, y).astype(cp.int32)
+            classes = cp.asnumpy(classes)
+        self.classes_ = classes
+        self.n_classes_ = len(classes)
+        return self._fit_forest(
+            X, y, handle=handle, global_n_rows=global_n_rows
+        )
+
     @nvtx.annotate(
         message="predict RF-Classifier @randomforestclassifier.pyx",
         domain="cuml_python",

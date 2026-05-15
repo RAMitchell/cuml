@@ -458,7 +458,7 @@ class BaseRandomForestModel(Base, InteropMixin):
             handle=get_handle(),
         )
 
-    def _fit_forest(self, X, y):
+    def _fit_forest(self, X, y, handle=None, global_n_rows=None):
         cdef bool is_classifier = self._estimator_type == "classifier"
         cdef bool is_float32 = X.dtype == np.float32
 
@@ -466,6 +466,7 @@ class BaseRandomForestModel(Base, InteropMixin):
         cdef uintptr_t y_ptr = y.data.ptr
         cdef int n_rows = X.shape[0]
         cdef int n_cols = X.shape[1]
+        cdef int n_rows_for_params
         cdef level_enum verbose = <level_enum> self._verbose_level
         cdef int n_classes = self.n_classes_ if is_classifier else 0
 
@@ -507,21 +508,23 @@ class BaseRandomForestModel(Base, InteropMixin):
             0 if self.random_state is None
             else check_random_seed(self.random_state)
         )
+        n_rows_for_params = n_rows if global_n_rows is None else global_n_rows
+
         cdef int min_samples_leaf = (
             self.min_samples_leaf if isinstance(self.min_samples_leaf, int)
-            else math.ceil(self.min_samples_leaf * n_rows)
+            else math.ceil(self.min_samples_leaf * n_rows_for_params)
         )
         cdef int min_samples_split = (
             self.min_samples_split if isinstance(self.min_samples_split, int)
-            else max(2, math.ceil(self.min_samples_split * n_rows))
+            else max(2, math.ceil(self.min_samples_split * n_rows_for_params))
         )
 
         cdef int n_bins
-        if self.n_bins > n_rows:
+        if self.n_bins > n_rows_for_params:
             warnings.warn("The number of bins, `n_bins` is greater than "
                           "the number of samples used for training. "
                           "Changing `n_bins` to number of training samples.")
-            n_bins = n_rows
+            n_bins = n_rows_for_params
         else:
             n_bins = self.n_bins
 
@@ -543,7 +546,8 @@ class BaseRandomForestModel(Base, InteropMixin):
         )
 
         cdef TreeliteModelHandle tl_handle
-        handle = get_handle(n_streams=self.n_streams)
+        if handle is None:
+            handle = get_handle(n_streams=self.n_streams)
         cdef handle_t* handle_ = <handle_t*><uintptr_t>handle.getHandle()
 
         # Store oob_score in C variable for nogil block
@@ -636,7 +640,7 @@ class BaseRandomForestModel(Base, InteropMixin):
             TreeliteFreeModel(tl_handle), "Failed to free Treelite model:"
         )
 
-        self._n_samples = y.shape[0]
+        self._n_samples = n_rows_for_params
         self._n_samples_bootstrap = (
             self._n_samples if self.max_samples is None
             else max(round(self._n_samples * self.max_samples), 1)

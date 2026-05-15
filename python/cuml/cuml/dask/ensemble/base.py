@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import math
 import warnings
 from collections.abc import Iterable
 
+import cudf
 import cupy as cp
 import dask
 import numpy as np
-import treelite
-from dask.distributed import Future
+from dask.distributed import Future, get_worker
+from raft_dask.common.comms import Comms, get_raft_comm_state
 
 from cuml import using_output_type
 from cuml.dask._compat import DASK_2025_4_0
@@ -62,43 +62,29 @@ class BaseRandomForestModel(object):
         self.ignore_empty_partitions = ignore_empty_partitions
         self.n_estimators = n_estimators
 
-        self.n_estimators_per_worker = self._estimators_per_worker(
-            n_estimators
-        )
         if base_seed is None:
             base_seed = 0
-        seeds = [base_seed]
-        for i in range(1, len(self.n_estimators_per_worker)):
-            sd = self.n_estimators_per_worker[i - 1] + seeds[i - 1]
-            seeds.append(sd)
+
+        self.n_estimators_per_worker = [
+            n_estimators for _ in range(len(self.workers))
+        ]
 
         self.rfs = {
             worker: self.client.submit(
                 model_func,
-                n_estimators=self.n_estimators_per_worker[n],
-                random_state=seeds[n],
+                n_estimators=n_estimators,
+                random_state=base_seed,
                 **kwargs,
                 pure=False,
                 workers=[worker],
             )
-            for n, worker in enumerate(self.workers)
+            for worker in self.workers
         }
 
         wait_and_raise_from_futures(list(self.rfs.values()))
 
     def _estimators_per_worker(self, n_estimators):
-        n_workers = len(self.workers)
-        if n_estimators < n_workers:
-            raise ValueError(
-                "n_estimators cannot be lower than number of dask workers."
-            )
-
-        n_est_per_worker = math.floor(n_estimators / n_workers)
-        n_estimators_per_worker = [n_est_per_worker for i in range(n_workers)]
-        remaining_est = n_estimators - (n_est_per_worker * n_workers)
-        for i in range(remaining_est):
-            n_estimators_per_worker[i] = n_estimators_per_worker[i] + 1
-        return n_estimators_per_worker
+        return [n_estimators for _ in range(len(self.workers))]
 
     def _fit(self, model, dataset, convert_dtype, broadcast_data):
         # rapids-pre-commit-hooks: disable-next-line
@@ -114,8 +100,18 @@ class BaseRandomForestModel(object):
                 stacklevel=3,
             )
 
+        if broadcast_data:
+            warnings.warn(
+                "broadcast_data is ignored for distributed RandomForest "
+                "training because each worker participates in one global "
+                "tree build over its local rows.",
+                UserWarning,
+                stacklevel=3,
+            )
+
         data = DistributedDataHandler.create(dataset, client=self.client)
-        self.active_workers = data.workers
+        fit_workers = list(self.workers)
+        self.active_workers = fit_workers
         self.datatype = data.datatype
 
         labels = self.client.persist(dataset[1])
@@ -124,81 +120,59 @@ class BaseRandomForestModel(object):
         else:
             self.num_classes = len(dask.array.unique(labels).compute())
 
-        combined_data = (
-            list(map(lambda x: x[1], data.gpu_futures))
-            if broadcast_data
-            else None
-        )
+        global_n_rows = sum(total for _, total in data._worker_sizes.values())
+        if global_n_rows <= 0:
+            raise ValueError("RandomForest requires at least one global row")
 
-        futures = list()
-        for idx, (worker, worker_data) in enumerate(
-            data.worker_to_parts.items()
-        ):
-            futures.append(
-                self.client.submit(
-                    _func_fit,
+        n_cols = dataset[0].shape[1]
+        x_dtype = _dtype_from_input(dataset[0])
+        y_dtype = _dtype_from_input(dataset[1])
+        classes = getattr(self, "unique_classes", None)
+
+        comms = Comms(comms_p2p=False, client=self.client)
+        comms.init(workers=fit_workers)
+        futures = []
+        fit_futures = {}
+        try:
+            for worker in fit_workers:
+                worker_data = data.worker_to_parts.get(worker)
+                fit_future = self.client.submit(
+                    _func_fit_distributed,
                     model[worker],
-                    combined_data if broadcast_data else worker_data,
+                    comms.sessionId,
+                    worker_data,
                     convert_dtype,
+                    self.datatype,
+                    x_dtype,
+                    y_dtype,
+                    n_cols,
+                    global_n_rows,
+                    classes,
                     workers=[worker],
                     pure=False,
                 )
-            )
+                fit_futures[worker] = fit_future
+                futures.append(fit_future)
+            wait_and_raise_from_futures(futures)
+        finally:
+            comms.destroy()
 
-        self.n_active_estimators_per_worker = []
-        for worker in data.worker_to_parts.keys():
-            n = self.workers.index(worker)
-            n_est = self.n_estimators_per_worker[n]
-            self.n_active_estimators_per_worker.append(n_est)
-
-        if len(self.workers) > len(self.active_workers):
-            if self.ignore_empty_partitions:
-                curent_estimators = (
-                    self.n_estimators
-                    / len(self.workers)
-                    * len(self.active_workers)
-                )
-                warn_text = (
-                    f"Data was not split among all workers "
-                    f"using only {self.active_workers} workers to fit."
-                    f"This will only train {curent_estimators}"
-                    f" estimators instead of the requested "
-                    f"{self.n_estimators}"
-                )
-                warnings.warn(warn_text)
-            else:
-                raise ValueError(
-                    "Data was not split among all workers. "
-                    "Re-run the code or "
-                    "use ignore_empty_partitions=True"
-                    " while creating model"
-                )
-        wait_and_raise_from_futures(futures)
+        self.rfs.update(fit_futures)
+        self.n_active_estimators_per_worker = [
+            self.n_estimators for _ in self.active_workers
+        ]
+        self._set_internal_model(futures[0])
         return self
 
     def _concat_treelite_models(self):
         """
-        Convert the cuML Random Forest model present in different workers to
-        the treelite format and then concatenate the different treelite models
-        to create a single model. The concatenated model is then converted to
-        bytes format.
+        Return one worker model.
+
+        Distributed training now synchronizes the core tree builder across
+        workers, so each worker owns an equivalent full forest. The old Dask
+        implementation concatenated independent per-worker sub-forests here.
         """
-        model_serialized_futures = list()
-        for w in self.active_workers:
-            model_serialized_futures.append(
-                dask.delayed(_serialize_treelite_bytes)(self.rfs[w])
-            )
-        mod_bytes = self.client.compute(model_serialized_futures, sync=True)
-        last_worker = w
-        model = self.rfs[last_worker].result()
-        tl_model_objs = [
-            treelite.Model.deserialize_bytes(indiv_worker_model_bytes)
-            for indiv_worker_model_bytes in mod_bytes
-        ]
-        concatenated_model = treelite.Model.concatenate(tl_model_objs)
-        model._treelite_model_bytes = concatenated_model.serialize_bytes()
-        model._fil_model = None
-        return model
+        return self.rfs[self.active_workers[0]].result()
 
     def _partial_inference(self, X, op_type, delayed, **kwargs):
         data = DistributedDataHandler.create(X, client=self.client)
@@ -339,6 +313,67 @@ def _func_fit(model, input_data, convert_dtype):
     X = concatenate([item[0] for item in input_data])
     y = concatenate([item[1] for item in input_data])
     return model.fit(X, y, convert_dtype=convert_dtype)
+
+
+def _func_fit_distributed(
+    model,
+    session_id,
+    input_data,
+    convert_dtype,
+    datatype,
+    x_dtype,
+    y_dtype,
+    n_cols,
+    global_n_rows,
+    classes,
+):
+    state = get_raft_comm_state(session_id, get_worker())
+    handle = state["handle"]
+    if input_data is None:
+        X, y = _empty_local_data(datatype, x_dtype, y_dtype, n_cols)
+    else:
+        X = concatenate([item[0] for item in input_data])
+        y = concatenate([item[1] for item in input_data])
+    if hasattr(model, "_fit_with_handle"):
+        kwargs = {
+            "convert_dtype": convert_dtype,
+            "global_n_rows": global_n_rows,
+        }
+        if classes is not None:
+            kwargs["classes"] = classes
+        return model._fit_with_handle(X, y, handle, **kwargs)
+    return model.fit(X, y, convert_dtype=convert_dtype)
+
+
+def _empty_local_data(datatype, x_dtype, y_dtype, n_cols):
+    if datatype == "cudf":
+        X = cudf.DataFrame(
+            {i: cp.empty(0, dtype=x_dtype) for i in range(n_cols)}
+        )
+        y = cudf.Series(cp.empty(0, dtype=y_dtype))
+    else:
+        X = cp.empty((0, n_cols), dtype=x_dtype, order="F")
+        y = cp.empty(0, dtype=y_dtype)
+    return X, y
+
+
+def _dtype_from_input(data):
+    dtype = getattr(data, "dtype", None)
+    if dtype is not None:
+        return np.dtype(dtype)
+
+    meta = getattr(data, "_meta", None)
+    dtype = getattr(meta, "dtype", None)
+    if dtype is not None:
+        return np.dtype(dtype)
+
+    dtypes = getattr(meta, "dtypes", None)
+    if dtypes is not None:
+        if hasattr(dtypes, "iloc"):
+            return np.dtype(dtypes.iloc[0])
+        return np.dtype(next(iter(dtypes)))
+
+    raise TypeError(f"Could not determine dtype for {type(data)!r}")
 
 
 def _func_predict_partial(model, input_data, **kwargs):

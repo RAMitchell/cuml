@@ -220,6 +220,33 @@ class RandomForestRegressor(BaseRandomForestModel, RegressorMixin):
         )
         return self._fit_forest(X, y)
 
+    def _fit_with_handle(
+        self,
+        X,
+        y,
+        handle,
+        *,
+        convert_dtype=True,
+        global_n_rows=None,
+    ) -> "RandomForestRegressor":
+        """
+        Internal fit path used by Dask RF. The supplied handle may contain
+        distributed RAFT communicator state.
+        """
+        X, y = check_inputs(
+            self,
+            X,
+            y,
+            dtype=("float32", "float64"),
+            convert_dtype=convert_dtype,
+            order="F",
+            ensure_min_samples=0,
+            reset=True,
+        )
+        return self._fit_forest(
+            X, y, handle=handle, global_n_rows=global_n_rows
+        )
+
     @nvtx.annotate(
         message="predict RF-Regressor @randomforestclassifier.pyx",
         domain="cuml_python",
