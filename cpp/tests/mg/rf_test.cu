@@ -30,7 +30,7 @@ namespace ML {
 namespace Test {
 namespace opg {
 
-enum class PartitionKind { Contiguous, Strided, Imbalanced };
+enum class PartitionKind { Contiguous, Strided, Imbalanced, EmptyNonRootRanks };
 
 struct RfMgTestParams {
   int n_rows;
@@ -44,6 +44,7 @@ struct RfMgTestParams {
   int min_samples_split;
   float min_impurity_decrease;
   int n_streams;
+  int handle_n_streams;
   CRITERION split_criterion;
   int seed;
   int n_labels;
@@ -143,6 +144,9 @@ std::vector<int> local_rows_for_rank(int n_rows, int rank, int size, PartitionKi
     for (int i = 1; i <= remaining % (size - 1); ++i) {
       counts[i]++;
     }
+  } else if (kind == PartitionKind::EmptyNonRootRanks && size > 1) {
+    counts.assign(size, 0);
+    counts[0] = n_rows;
   }
 
   int begin = std::accumulate(counts.begin(), counts.begin() + rank, 0);
@@ -246,7 +250,7 @@ class RfMgPropertyTestImpl {
     }
     RAFT_CUDA_TRY(cudaSetDevice(rank));
 
-    auto stream_pool = std::make_shared<rmm::cuda_stream_pool>(params.n_streams);
+    auto stream_pool = std::make_shared<rmm::cuda_stream_pool>(params.handle_n_streams);
     raft::handle_t handle(rmm::cuda_stream_per_thread, stream_pool);
     raft::comms::initialize_mpi_comms(&handle, MPI_COMM_WORLD);
 
@@ -362,11 +366,45 @@ class RfMgPropertyTest : public ::testing::TestWithParam<RfMgTestParams> {
 TEST_P(RfMgPropertyTest, DistributedProperties) {}
 
 std::vector<RfMgTestParams> inputs = {
-  {128, 4, 1, 1.0f, 3, -1, 16, 1, 2, 0.0f, 1, GINI, 7, 2, false, PartitionKind::Contiguous},
-  {128, 4, 3, 0.5f, 4, 16, 32, 1, 2, 0.0f, 2, ENTROPY, 11, 2, false, PartitionKind::Strided},
-  {192, 6, 1, 1.0f, 5, -1, 32, 2, 4, 0.0f, 1, MSE, 13, 2, false, PartitionKind::Imbalanced},
-  {96, 3, 2, 1.0f, 4, 8, 8, 1, 2, 0.0f, 1, GINI, 17, 2, true, PartitionKind::Imbalanced},
-  {160, 5, 1, 0.8f, 4, -1, 16, 1, 2, 0.0f, 1, MSE, 19, 2, true, PartitionKind::Contiguous}};
+  {128, 4, 1, 1.0f, 3, -1, 16, 1, 2, 0.0f, 1, 1, GINI, 7, 2, false, PartitionKind::Contiguous},
+  {128, 4, 3, 0.5f, 4, 16, 32, 1, 2, 0.0f, 4, 1, ENTROPY, 11, 2, false, PartitionKind::Strided},
+  {192, 6, 1, 1.0f, 5, -1, 32, 2, 4, 0.0f, 1, 1, MSE, 13, 2, false, PartitionKind::Imbalanced},
+  {96, 3, 2, 1.0f, 4, 8, 8, 1, 2, 0.0f, 1, 1, GINI, 17, 2, true, PartitionKind::Imbalanced},
+  {160, 5, 1, 0.8f, 4, -1, 16, 1, 2, 0.0f, 1, 1, MSE, 19, 2, true, PartitionKind::Contiguous},
+  {64,
+   4,
+   2,
+   1.0f,
+   4,
+   -1,
+   16,
+   1,
+   2,
+   0.0f,
+   3,
+   1,
+   GINI,
+   23,
+   2,
+   false,
+   PartitionKind::EmptyNonRootRanks},
+  {80,
+   5,
+   2,
+   0.8f,
+   4,
+   -1,
+   16,
+   1,
+   2,
+   0.0f,
+   3,
+   1,
+   MSE,
+   29,
+   2,
+   false,
+   PartitionKind::EmptyNonRootRanks}};
 
 INSTANTIATE_TEST_CASE_P(RfTests, RfMgPropertyTest, ::testing::ValuesIn(inputs));
 

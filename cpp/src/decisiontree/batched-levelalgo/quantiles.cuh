@@ -142,15 +142,16 @@ CUML_EXPORT QuantileReturnValue<T> computeQuantiles(const raft::handle_t& handle
   raft::common::nvtx::push_range("computeQuantiles");
   RAFT_EXPECTS(data != nullptr, "data pointer must not be null");
   RAFT_EXPECTS(max_n_bins > 0, "max_n_bins must be positive");
-  RAFT_EXPECTS(n_rows > 0, "n_rows must be positive");
+  RAFT_EXPECTS(n_rows >= 0, "n_rows must be non-negative");
   RAFT_EXPECTS(n_cols > 0, "n_cols must be positive");
   RAFT_EXPECTS(oversampling_factor > 0, "oversampling_factor must be positive");
 
   auto stream      = handle.get_stream();
   bool distributed = raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1;
-  int rank         = distributed ? handle.get_comms().get_rank() : 0;
-  int comm_size    = distributed ? handle.get_comms().get_size() : 1;
-  int64_t size     = static_cast<int64_t>(max_n_bins) * oversampling_factor;
+  RAFT_EXPECTS(distributed || n_rows > 0, "n_rows must be positive");
+  int rank           = distributed ? handle.get_comms().get_rank() : 0;
+  int comm_size      = distributed ? handle.get_comms().get_size() : 1;
+  int64_t size       = static_cast<int64_t>(max_n_bins) * oversampling_factor;
   auto target_sample = std::max<int64_t>(1, size);
 
   std::uint64_t global_rows = static_cast<std::uint64_t>(n_rows);

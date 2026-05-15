@@ -66,13 +66,20 @@ class RandomForest {
     }
   }
 
-  void error_checking(const T* input, L* predictions, int n_rows, int n_cols, bool predict) const
+  void error_checking(const T* input,
+                      L* predictions,
+                      int n_rows,
+                      int n_cols,
+                      bool predict,
+                      bool allow_empty_rows = false) const
   {
     if (predict) {
       ASSERT(predictions != nullptr, "Error! User has not allocated memory for predictions.");
     }
-    ASSERT((n_rows > 0), "Invalid n_rows %d", n_rows);
+    ASSERT(allow_empty_rows ? (n_rows >= 0) : (n_rows > 0), "Invalid n_rows %d", n_rows);
     ASSERT((n_cols > 0), "Invalid n_cols %d", n_cols);
+
+    if (n_rows == 0) { return; }
 
     bool input_is_dev_ptr = DT::is_dev_ptr(input);
     bool preds_is_dev_ptr = DT::is_dev_ptr(predictions);
@@ -121,9 +128,11 @@ class RandomForest {
            bool* bootstrap_masks = nullptr)
   {
     raft::common::nvtx::range fun_scope("RandomForest::fit @randomforest.cuh");
-    this->error_checking(input, labels, n_rows, n_cols, false);
     const raft::handle_t& handle = user_handle;
-    int device                   = 0;
+    bool distributed =
+      raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1;
+    this->error_checking(input, labels, n_rows, n_cols, false, distributed);
+    int device = 0;
     RAFT_CUDA_TRY(cudaGetDevice(&device));
     int n_sampled_rows = 0;
     if (this->rf_params.bootstrap) {
@@ -138,15 +147,13 @@ class RandomForest {
       n_sampled_rows = n_rows;
     }
     int n_streams = this->rf_params.n_streams;
-    ASSERT(static_cast<std::size_t>(n_streams) <= handle.get_stream_pool_size(),
-           "rf_params.n_streams (=%d) should be <= raft::handle_t.n_streams (=%lu)",
-           n_streams,
-           handle.get_stream_pool_size());
     // Distributed tree builders issue collectives independently, so train them serially until
     // the forest-level scheduler can impose a global collective order across concurrent trees.
-    if (raft::resource::comms_initialized(handle) && handle.get_comms().get_size() > 1) {
-      n_streams = 1;
-    }
+    if (distributed) { n_streams = 1; }
+    ASSERT(static_cast<std::size_t>(n_streams) <= handle.get_stream_pool_size(),
+           "effective RF n_streams (=%d) should be <= raft::handle_t.n_streams (=%lu)",
+           n_streams,
+           handle.get_stream_pool_size());
 
     // computing the quantiles: last two return values are shared pointers to device memory
     // encapsulated by quantiles struct
