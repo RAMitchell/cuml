@@ -129,7 +129,9 @@ class BaseRandomForestModel(object):
         y_dtype = _dtype_from_input(dataset[1])
         classes = getattr(self, "unique_classes", None)
 
-        comms = Comms(comms_p2p=False, client=self.client)
+        comms = Comms(
+            comms_p2p=False, client=self.client, streams_per_handle=1
+        )
         comms.init(workers=fit_workers)
         futures = []
         fit_futures = {}
@@ -161,7 +163,7 @@ class BaseRandomForestModel(object):
         self.n_active_estimators_per_worker = [
             self.n_estimators for _ in self.active_workers
         ]
-        self._set_internal_model(futures[0])
+        self._set_internal_model(futures[0].result())
         return self
 
     def _concat_treelite_models(self):
