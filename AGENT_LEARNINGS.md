@@ -31,6 +31,21 @@ append a correction instead of silently deleting the old context.
 
 ## Current Shared Learnings
 
+### 2026-06-11 - Build - Isolated RF validation in `cuml_dev`
+
+- Learned: The default PATH has CMake 3.28 and no Ninja, but
+  `/home/rorym/miniforge3/envs/cuml_dev` has CMake 4.3.3 and Ninja 1.13.2,
+  which can configure and build current cuML.
+- Evidence: Configure succeeded with `LIBCUML_BUILD_DIR=/home/rorym/cuml-builds/codex-rf-deep-perf-notes/cpp-release-ninja`
+  and `INSTALL_PREFIX=/home/rorym/cuml-installs/codex-rf-deep-perf-notes/release`;
+  targeted RF CUDA objects and the `cuml` target built successfully.
+- Reuse: For branch-local validation, prepend `cuml_dev/bin` to PATH and set
+  `CONDA_PREFIX` and `CMAKE_PREFIX_PATH` to `/home/rorym/miniforge3/envs/cuml_dev`.
+  Python imports load the conda `libcuml.so` unless `LD_PRELOAD` points at the
+  isolated build `libcuml.so`; use `/proc/self/maps` to verify the loaded
+  library before trusting Python smoke tests.
+- Confidence: High.
+
 ### Review posture is risk-first
 
 - Learned: The existing Python and C++ agent guides ask reviewers to focus on
