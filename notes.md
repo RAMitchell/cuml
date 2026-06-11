@@ -238,3 +238,105 @@ Nsight Systems kernel summary for the out-of-place prototype:
 | leaf kernel | 0.127s | 100 | 9.1% |
 
 Combined partition-stage GPU time is about 0.178s in the prototype profile. The original installed-library profile had `nodeSplitKernel` at 4.79s, but because the rebuilt local library has different model behavior and timing, this should not be interpreted as a direct 27x improvement. The clean local comparison is the 4.99s to 3.30s fit-time improvement above.
+
+## 2026-06-11 Blackwell Local-Build Bottleneck Follow-up
+
+Environment:
+
+- GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+- Build: isolated local `libcuml.so` from `/home/rorym/cuml-builds/codex-rf-deep-perf-notes/cpp-release-ninja`
+- Runtime: `cuml_dev` Python with `LD_PRELOAD` pointing at the isolated `libcuml.so`
+- Dataset: cached sklearn cover type, full rows, stratified 80/20 split
+- Case unless noted: 100 trees, `max_depth=30`, `n_bins=128`, `n_streams=4`
+
+Profiling limitation: Nsight Systems collected a `.qdstrm`, but this install is missing the importer needed for stats. Nsight Compute is blocked by `ERR_NVGPUCTRPERM`, so this section relies on timing sweeps and the earlier V100 Nsight summary.
+
+### Current Local Timing Matrix
+
+Depth sweep with `max_features=sqrt`:
+
+| max_depth | fit | accuracy |
+| ---: | ---: | ---: |
+| 5 | 0.747s | 0.6745 |
+| 10 | 0.549s | 0.7383 |
+| 15 | 0.622s | 0.7851 |
+| 20 | 0.950s | 0.8292 |
+| 25 | 1.322s | 0.8545 |
+| 30 | 1.600s | 0.8654 |
+| None | 1.785s | 0.8692 |
+
+Depth 30 feature sweep:
+
+| max_features | fit | accuracy |
+| ---: | ---: | ---: |
+| sqrt | 1.600s | 0.8654 |
+| 0.25 | 4.377s | 0.9504 |
+| 0.5 | 5.767s | 0.9645 |
+| 1.0 | 7.533s | 0.9638 |
+
+`n_bins` sweep at depth 30:
+
+| n_bins | sqrt fit | all-feature fit | sqrt accuracy | all-feature accuracy |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 1.468s | 7.759s | 0.8493 | 0.9555 |
+| 64 | 1.570s | 7.398s | 0.8607 | 0.9615 |
+| 128 | 1.600s | 7.533s | 0.8654 | 0.9638 |
+| 256 | 1.824s | 9.052s | 0.8688 | 0.9641 |
+
+`n_streams` sweep at depth 30, `n_bins=128`:
+
+| n_streams | sqrt fit | all-feature fit |
+| ---: | ---: | ---: |
+| 1 | 1.914s | 8.196s |
+| 4 | 1.600s | 7.533s |
+| 8 | 1.633s | 7.575s |
+
+Tree-count scaling at depth 30, `n_bins=128`, `n_streams=4`:
+
+| n_estimators | sqrt fit | all-feature fit |
+| ---: | ---: | ---: |
+| 10 | 0.151s | 0.748s |
+| 50 | 0.823s | 3.784s |
+| 100 | 1.600s | 7.533s |
+
+### Negative Experiment: Larger Column Batches
+
+Temporarily changing `Builder::n_blks_for_cols` from 10 to 32 did not improve the all-feature case:
+
+| n_blks_for_cols | sqrt fit | all-feature fit |
+| ---: | ---: | ---: |
+| 10 | 1.600s | 7.533s |
+| 32 | 1.797s | 7.675s |
+
+This rules out the simplest launch-count explanation for the all-feature slowdown. Fewer column-batch launches are apparently offset by larger `grid.y`, more simultaneously live histogram workspace, scheduling effects, or reduced cache locality.
+
+### Bottleneck Conclusion
+
+The out-of-place partition prototype moved the dominant cost away from row partitioning. The current bottleneck is split evaluation, especially `computeSplitKernel` histogram construction and gain evaluation across node-feature pairs.
+
+Evidence:
+
+- Runtime scales nearly linearly with `n_estimators`, so the cost is inside per-tree growth rather than one-time quantile construction or Python overhead.
+- Runtime scales strongly with `max_features`: at depth 30, all-features is about 4.7x slower than `sqrt` on the same 54-feature dataset.
+- Runtime moves only modestly with `n_bins` from 32 to 128, so bin count is not the primary lever for this dataset; the expensive part is the repeated row/feature pass itself.
+- `n_streams` from 1 to 4 helps modestly, but 8 does not improve further, so stream-level tree concurrency is not the main remaining gap.
+- The previous Nsight summary for the prototype already showed `computeSplitKernel` at about 69% of GPU kernel time and all partition-stage kernels combined at about 13%.
+
+Important caveat: this local build still has the previously noted accuracy mismatch versus the installed cuML package for the deep `sqrt` case. These timing conclusions should be used for bottleneck direction, but any production change needs an apples-to-apples correctness baseline first.
+
+### Improvement Candidates
+
+1. Make split evaluation reuse row metadata across multiple features.
+   Current `computeSplitKernel` maps one node tile and one feature to a CTA. For all-features, each feature rereads the same row-id range and labels. A multi-feature CTA or warp-group design could stage row ids and labels once, then update histograms for a small group of features. This trades shared memory/register pressure for less repeated row metadata traffic and fewer independent CTAs.
+
+2. Add a specialized small-node split path.
+   Deep levels create many small nodes. The current path still launches CTAs per node-feature and pays fixed work for tiny ranges. A packed-small-node kernel could group several tiny node-feature histograms into one CTA or warp block, improving tail utilization and reducing per-node overhead.
+
+3. Keep the out-of-place partition path, but fuse its four stages only if partition reappears in profiles.
+   Current timing points to split evaluation, not partition. Fusing copy/misfit/swap/copy-back may still help `sqrt`, but it is second-order until `computeSplitKernel` is improved.
+
+4. Avoid a blanket increase to `n_blks_for_cols`.
+   The `10 -> 32` experiment was neutral to negative. Any column-batch tuning should be adaptive and benchmarked against sampled feature count, classes, bins, large-node count, and workspace pressure.
+
+5. Add optional stage timing instrumentation.
+   Since Nsight counters are restricted, a low-overhead `CUML_RF_STAGE_TIMING=1` path using CUDA events around feature sampling, compute split, partition, and leaf prediction would make future experiments less dependent on external profiler permissions.
