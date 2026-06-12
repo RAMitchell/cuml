@@ -66,12 +66,9 @@ DI OutT* alignPointer(InT dataset)
 
 template <typename DataT, typename LabelT, typename IdxT, int TPB>
 void launchNodeSplitKernel(const IdxT min_samples_leaf,
-                           const IdxT min_samples_split,
-                           const IdxT max_leaves,
                            const DataT min_impurity_decrease,
                            const Dataset<DataT, LabelT, IdxT>& dataset,
                            const NodeWorkItem* work_items,
-                           size_t work_items_size,
                            const Split<DataT, IdxT>* splits,
                            const WorkloadInfo<IdxT>* workload_info,
                            size_t n_blocks_dimx,
