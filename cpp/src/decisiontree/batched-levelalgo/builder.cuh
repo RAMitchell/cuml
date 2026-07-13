@@ -158,11 +158,6 @@ struct Builder {
 
   /** default threads per block for most kernels in here */
   static constexpr int TPB_DEFAULT = 128;
-  // Tunable performance heuristic for the shared-memory histogram path. Large per-block
-  // histograms, usually from large n_classes, can reduce occupancy enough that global memory is
-  // faster even when the histogram fits in shared memory. 16 KiB keeps small/default histograms in
-  // shared memory while avoiding the large-class shared-memory slowdown measured locally.
-  static constexpr size_t tunable_split_histogram_dynamic_smem_limit_bytes = 16 * 1024;
   /** handle to get device properties */
   const raft::handle_t& handle;
   /** stream to launch kernels */
