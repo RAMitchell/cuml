@@ -161,7 +161,9 @@ void launchComputeSplitKernel(typename ObjectiveT::BinT* histograms,
                               const WorkloadInfo<IdxT>* workload_info,
                               uint64_t seed,
                               size_t n_work_items,
+                              bool use_shared_memory_histogram,
                               dim3 grid,
+                              size_t smem_size,
                               cudaStream_t builder_stream);
 
 }  // namespace DT

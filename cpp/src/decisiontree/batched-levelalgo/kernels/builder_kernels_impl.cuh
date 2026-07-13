@@ -259,9 +259,11 @@ static __global__ void buildHistogramsKernel(typename ObjectiveT::BinT* histogra
                                              IdxT colStart,
                                              const IdxT* column_samples,
                                              ObjectiveT objective,
-                                             const WorkloadInfo<IdxT>* workload_info)
+                                             const WorkloadInfo<IdxT>* workload_info,
+                                             bool use_shared_memory_histogram)
 {
   using BinT = typename ObjectiveT::BinT;
+  extern __shared__ char smem[];
 
   WorkloadInfo<IdxT> workload_info_cta = workload_info[blockIdx.x];
   IdxT nid                             = workload_info_cta.nodeid;
@@ -280,10 +282,19 @@ static __global__ void buildHistogramsKernel(typename ObjectiveT::BinT* histogra
   auto end                  = range_start + range_len;
   auto histogram_len        = n_bins * n_classes;
   auto histogram_offset     = (std::size_t(nid) * gridDim.y + blockIdx.y) * max_n_bins * n_classes;
-  auto* histogram           = histograms + histogram_offset;
+  auto* global_histogram    = histograms + histogram_offset;
+  auto* histogram           = global_histogram;
   auto* quantiles_for_split = quantiles.quantiles_array + std::size_t(max_n_bins) * col;
   IdxT stride               = blockDim.x * num_blocks;
   IdxT tid                  = threadIdx.x + offset_blockid * blockDim.x;
+
+  if (use_shared_memory_histogram) {
+    histogram = alignPointer<BinT>(smem);
+    for (IdxT i = threadIdx.x; i < histogram_len; i += blockDim.x) {
+      histogram[i] = BinT();
+    }
+    __syncthreads();
+  }
 
   for (auto i = range_start + tid; i < end; i += stride) {
     auto row   = dataset.row_ids[i];
@@ -292,6 +303,13 @@ static __global__ void buildHistogramsKernel(typename ObjectiveT::BinT* histogra
 
     IdxT start = lower_bound(quantiles_for_split, n_bins, data);
     objective.IncrementHistogram(histogram, n_bins, start, label, dataset, row);
+  }
+
+  if (use_shared_memory_histogram) {
+    __syncthreads();
+    for (IdxT i = threadIdx.x; i < histogram_len; i += blockDim.x) {
+      BinT::AtomicAdd(global_histogram + i, histogram[i]);
+    }
   }
 }
 
@@ -356,7 +374,9 @@ void launchComputeSplitKernel(typename ObjectiveT::BinT* histograms,
                               const WorkloadInfo<IdxT>* workload_info,
                               uint64_t seed,
                               size_t n_work_items,
+                              bool use_shared_memory_histogram,
                               dim3 grid,
+                              size_t smem_size,
                               cudaStream_t builder_stream)
 {
   (void)min_samples_split;
@@ -365,15 +385,16 @@ void launchComputeSplitKernel(typename ObjectiveT::BinT* histograms,
   (void)seed;
 
   buildHistogramsKernel<DataT, LabelT, IdxT, TPB, ObjectiveT>
-    <<<grid, TPB, 0, builder_stream>>>(histograms,
-                                       max_n_bins,
-                                       dataset,
-                                       quantiles,
-                                       work_items,
-                                       colStart,
-                                       column_samples,
-                                       objective,
-                                       workload_info);
+    <<<grid, TPB, smem_size, builder_stream>>>(histograms,
+                                               max_n_bins,
+                                               dataset,
+                                               quantiles,
+                                               work_items,
+                                               colStart,
+                                               column_samples,
+                                               objective,
+                                               workload_info,
+                                               use_shared_memory_histogram);
 
   dim3 split_grid(n_work_items, grid.y, 1);
   findBestSplitsKernel<DataT, LabelT, IdxT, TPB, ObjectiveT>

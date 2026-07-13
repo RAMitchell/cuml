@@ -158,6 +158,10 @@ struct Builder {
 
   /** default threads per block for most kernels in here */
   static constexpr int TPB_DEFAULT = 128;
+  // Shared histogram accumulation avoids many global atomics, but very large
+  // histograms can reduce occupancy enough that direct global accumulation is
+  // faster. Keep the split so histogram build can choose per launch.
+  static constexpr size_t tunable_split_histogram_dynamic_smem_limit_bytes = 16 * 1024;
   /** handle to get device properties */
   const raft::handle_t& handle;
   /** stream to launch kernels */
@@ -498,6 +502,27 @@ struct Builder {
     RAFT_CUDA_TRY(cudaPeekAtLastError());
   }
 
+  struct SplitHistogramConfig {
+    bool use_shared_memory_histogram;
+    size_t dynamic_smem_size;
+  };
+
+  SplitHistogramConfig computeSplitHistogramConfig() const
+  {
+    auto shared_histogram_size =
+      ML::checked_mul<std::size_t>(params.max_n_bins, dataset.num_outputs, sizeof(BinT));
+    auto shared_dynamic_smem_size =
+      ML::checked_add<std::size_t>(shared_histogram_size, alignof(BinT));
+
+    auto available_smem = size_t(handle.get_device_properties().sharedMemPerBlock);
+    bool use_shared_memory_histogram =
+      shared_dynamic_smem_size <= available_smem &&
+      shared_dynamic_smem_size <= tunable_split_histogram_dynamic_smem_limit_bytes;
+
+    return {use_shared_memory_histogram,
+            use_shared_memory_histogram ? shared_dynamic_smem_size : 0};
+  }
+
   void computeSplit(IdxT col, size_t n_blocks_dimx, size_t n_work_items)
   {
     // if no instances to split, return
@@ -510,30 +535,34 @@ struct Builder {
     dim3 grid(n_blocks_dimx, n_blocks_dimy, 1);
     auto len_histograms =
       ML::checked_mul<std::size_t>(n_bins, n_classes, n_blocks_dimy, n_work_items);
-    auto histograms_bytes = ML::checked_mul<std::size_t>(sizeof(BinT), len_histograms);
+    auto histograms_bytes       = ML::checked_mul<std::size_t>(sizeof(BinT), len_histograms);
+    auto split_histogram_config = computeSplitHistogramConfig();
     RAFT_CUDA_TRY(cudaMemsetAsync(histograms, 0, histograms_bytes, builder_stream));
     // create the objective function object
     ObjectiveT objective(dataset.num_outputs, params.min_samples_leaf, params.split_criterion);
     // call the computeSplitKernel
     raft::common::nvtx::range kernel_scope("computeSplitKernel @builder.cuh [batched-levelalgo]");
-    launchComputeSplitKernel<DataT, LabelT, IdxT, TPB_DEFAULT, ObjectiveT>(histograms,
-                                                                           params.max_n_bins,
-                                                                           params.min_samples_split,
-                                                                           params.max_leaves,
-                                                                           dataset,
-                                                                           quantiles,
-                                                                           d_work_items,
-                                                                           col,
-                                                                           column_samples,
-                                                                           mutex,
-                                                                           splits,
-                                                                           objective,
-                                                                           treeid,
-                                                                           workload_info,
-                                                                           seed,
-                                                                           n_work_items,
-                                                                           grid,
-                                                                           builder_stream);
+    launchComputeSplitKernel<DataT, LabelT, IdxT, TPB_DEFAULT, ObjectiveT>(
+      histograms,
+      params.max_n_bins,
+      params.min_samples_split,
+      params.max_leaves,
+      dataset,
+      quantiles,
+      d_work_items,
+      col,
+      column_samples,
+      mutex,
+      splits,
+      objective,
+      treeid,
+      workload_info,
+      seed,
+      n_work_items,
+      split_histogram_config.use_shared_memory_histogram,
+      grid,
+      split_histogram_config.dynamic_smem_size,
+      builder_stream);
   }
 
   // Set the leaf value predictions in batch
