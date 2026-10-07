@@ -169,3 +169,7 @@ This is not yet a public-backend replacement. Remaining work includes:
 The legacy harness requires training-cover metadata; handcrafted test fixtures use
 `ModelBuilder.sum_hess`. Treelite 4.7.0's Python `data_count` method in the tested
 environment incorrectly calls the gain setter, so it cannot create that metadata.
+
+Optimization experiments, including quadrature and decision-pattern reuse, are
+described in [OPTIMIZATION_EXPERIMENTS.md](OPTIMIZATION_EXPERIMENTS.md). See
+[OPTIMIZATION_RESULTS.md](OPTIMIZATION_RESULTS.md) for the complete measured results.

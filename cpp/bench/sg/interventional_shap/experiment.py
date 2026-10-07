@@ -152,10 +152,13 @@ def custom_model(nodes, features, dtype="float64", bias=0.25, cover=True):
     return builder.commit()
 
 
-def validate(lib, include_legacy=True):
+def validate(lib, include_legacy=True, check_callback=None):
     records = []
 
     def check(name, model, x, background, baseline=True, expected=None):
+        if check_callback is not None:
+            check_callback(name, model, x, background, expected)
+            return
         reference = (
             exhaustive(model, x, background) if expected is None else expected
         )
@@ -352,7 +355,10 @@ def validate(lib, include_legacy=True):
     )
     model = treelite.frontend.from_xgboost(booster)
     check("xgboost-scalar-multiclass", model, train[:4], train[4:9])
-    print(f"Validated {len(records)} backend/case combinations", flush=True)
+    if check_callback is None:
+        print(
+            f"Validated {len(records)} backend/case combinations", flush=True
+        )
     return records
 
 
