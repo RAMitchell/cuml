@@ -197,7 +197,7 @@ The original is the frozen, unoptimized experimental backend, not legacy GPUTree
         )
         values = [sample["wall_seconds"] for sample in best["samples"]]
         cv = 100 * statistics.pstdev(values) / statistics.mean(values)
-        text += f"| {name} | {best['variant']} | {cv:.2f}% | {best['peak_workspace_bytes'] / 2**20:.2f} | {best['max_error']:.3g} |\n"
+        text += f"| {name} | {best['variant']} | {cv:.2f}% | {best['peak_workspace_bytes'] / 2**20:.3f} | {best['max_error']:.3g} |\n"
     text += """
 “Best” selects the smallest median among these three optimized candidates; other
 methods were not confirmed across this entire twelve-model grid. Close differences should not be
@@ -350,13 +350,23 @@ resource ownership, and additional hardware coverage.
 """
     pc = {r["variant"]: r for r in pattern_confirmation["results"]}
     assert len(pc) == 2 and all(len(r["cold"]) == 5 for r in pc.values())
-    text += (
+    followup = (
         "\n## Small-model pattern follow-up\n\nA separate five-repetition confirmation of dense pattern reuse on the complete "
         "Fashion-MNIST-small model (10,000 rows, 100 references) measured "
         f"{med(pc['original']['cold']):.6f} seconds for the original and "
         f"{med(pc['pattern_dense']['cold']):.6f} seconds for dense patterns, including "
         "input preparation. This follow-up was prompted by the small-model scaling result; "
         "it is separate from the four-way confirmation above.\n"
+    )
+    text = text.replace(
+        "## Every traversal variant on complete diagnostic models",
+        followup
+        + "\n## Every traversal variant on complete diagnostic models",
+    )
+    speedup = med(pc["original"]["cold"]) / med(pc["pattern_dense"]["cold"])
+    text = text.replace(
+        "The [experiment specification]",
+        f"Dense pattern reuse also wins on the complete Fashion-MNIST-small model: {speedup:.2f}x\nfaster than the original, including input preparation.\n\nThe [experiment specification]",
     )
     text += """
 ## Experiment decisions
@@ -372,7 +382,7 @@ resource ownership, and additional hardware coverage.
 | 7. Background pattern frequencies | Helps the large-background prefix workload, but dense transforms can be faster. |
 | 8. Foreground pattern reuse | Same-input reuse can be cheap; rebuilding for new foreground rows must be included. |
 | 9. Sparse pattern pairs | Exact alternative with sorting/construction overhead; not a universal replacement. |
-| 10. Dense transforms | Strong large-background results on the tested prefixes; exponential width cost still requires a fallback. |
+| 10. Dense transforms | Strong complete-small-model and large-background prefix results; exponential width cost still requires a fallback. |
 | 11. Adaptive selection | Current heuristic often loses to an explicit method choice; do not promote it as-is. |
 | 12. Leaf quadrature | Exact-order version is slower in the complete-model screen; fixed eight points is not exact beyond depth 16. |
 | 13. Subtree quadrature | Improves on leaf quadrature here, but still trails lookup in the complete-model screen. |
