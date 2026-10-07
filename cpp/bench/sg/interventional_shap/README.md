@@ -75,7 +75,7 @@ preparation is measured separately; training, input uploads, and host output
 copies are excluded from compute timing. Legacy and new output buffers are
 preallocated. CUDA-event and synchronized wall-clock timings are both recorded.
 
-There are three dataset/model seeds, eleven timing samples per backend, randomized
+The synthetic experiment uses three dataset/model seeds, eleven timing samples per backend, randomized
 backend order each round, and warmup calls before measurement. Results include
 median, p10, p90, standard deviation, raw samples, and maximum repeated-output
 difference. Forest workloads vary foreground/background sizes, features, depth,
@@ -83,7 +83,11 @@ and tree count. Fully disagreeing pairs in a complete tree deliberately remove
 pruning opportunities; identical pairs test the opposite extreme.
 
 Measured results and sanitizer outcomes are in [RESULTS.md](RESULTS.md), with
-raw measurements in [results.json](results.json).
+raw measurements in [results.json](results.json). The separate
+[GPUTreeShap repository workload report](REPOSITORY_RESULTS.md) covers all four
+real datasets and three model sizes with 10,000 foreground rows and 100
+background rows. Its five-repeat, fixed-order protocol and correctness findings
+are documented separately; the synthetic speedups do not apply uniformly.
 
 ## Reproduce
 

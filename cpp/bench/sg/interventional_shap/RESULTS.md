@@ -1,5 +1,9 @@
 # Interventional SHAP experiment results — 2026-10-07
 
+For the subsequent four-dataset, twelve-model experiment, see
+[REPOSITORY_RESULTS.md](REPOSITORY_RESULTS.md). The numbers below are the
+synthetic workload and should not be generalized to all real models.
+
 The thread-per-pair implementation was the fastest new variant on the sampled
 random forests: **6.1–30.1× faster than the cached legacy backend**, across 18
 forest configurations/seeds. The eight-lane variant was better on the complete
