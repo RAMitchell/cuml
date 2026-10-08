@@ -184,3 +184,6 @@ cases. Raw repeats are in `policy_results.json.gz`, with a flat
 [Depth-six follow-up](DEPTH_POLICY_RESULTS.md) extends the same batch guards to
 newly trained depth-four, depth-five and depth-six models, including 100-round
 depth-six ensembles.
+
+[Product-rule experiments](PRODUCT_POLICY_RESULTS.md) test equal-product batch
+shapes and removing the separate foreground/background minimums.

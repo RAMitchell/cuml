@@ -1,5 +1,8 @@
 # Extending the cheap dispatch rule to depth six
 
+Follow-up: [product-rule experiments](PRODUCT_POLICY_RESULTS.md) test simplifying
+the batch guards and expose a memory-estimation fallback at a wider batch shape.
+
 Measured 2026-10-08, NVIDIA RTX PRO 6000 Blackwell (physical GPU 1), same
 standalone prototypes as POLICY_RESULTS.md. No CUDA kernels or production API
 changed. The rule was fixed before this experiment: raise the maximum depth
