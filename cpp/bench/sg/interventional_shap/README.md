@@ -180,3 +180,7 @@ described in [OPTIMIZATION_EXPERIMENTS.md](OPTIMIZATION_EXPERIMENTS.md). See
 between bounded streamed dense processing and low-workspace traversal across 92
 cases. Raw repeats are in `policy_results.json.gz`, with a flat
 `policy_summary.csv` for inspection.
+
+[Depth-six follow-up](DEPTH_POLICY_RESULTS.md) extends the same batch guards to
+newly trained depth-four, depth-five and depth-six models, including 100-round
+depth-six ensembles.

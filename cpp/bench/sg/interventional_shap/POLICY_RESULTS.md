@@ -1,5 +1,8 @@
 # Cheap interventional SHAP dispatch experiments
 
+Follow-up: [depth-six experiments](DEPTH_POLICY_RESULTS.md) extend the validated
+candidate depth ceiling while retaining the batch-size and memory guards below.
+
 Measured 2026-10-08 on physical GPU 1, NVIDIA RTX PRO 6000 Blackwell (96 GB),
 using the existing standalone CuPy prototypes. No production API or CUDA kernel
 changed. Another observed compute process was on physical GPU 0.
