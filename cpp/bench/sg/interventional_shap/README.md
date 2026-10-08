@@ -173,3 +173,10 @@ environment incorrectly calls the gain setter, so it cannot create that metadata
 Optimization experiments, including quadrature and decision-pattern reuse, are
 described in [OPTIMIZATION_EXPERIMENTS.md](OPTIMIZATION_EXPERIMENTS.md). See
 [OPTIMIZATION_RESULTS.md](OPTIMIZATION_RESULTS.md) for the complete measured results.
+
+## Cheap dispatch follow-up
+
+[Policy experiments and results](POLICY_RESULTS.md) test metadata-only switching
+between bounded streamed dense processing and low-workspace traversal across 92
+cases. Raw repeats are in `policy_results.json.gz`, with a flat
+`policy_summary.csv` for inspection.
